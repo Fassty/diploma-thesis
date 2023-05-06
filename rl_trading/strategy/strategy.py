@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import numpy as np
 
-from enums import Action
+from rl_trading.enums import Action
 
 
 class AbstractStrategy(ABC):

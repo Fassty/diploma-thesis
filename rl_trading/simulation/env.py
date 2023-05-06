@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from gymnasium.core import RenderFrame, ObsType, ActType
 from tqdm.auto import tqdm
-from enums import Action
+from rl_trading.enums import Action
 import logging
-from strategy import AbstractStrategy
+from rl_trading.strategy.strategy import AbstractStrategy
 import gymnasium as gym
 from gymnasium import spaces
 
