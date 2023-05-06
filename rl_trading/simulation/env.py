@@ -10,6 +10,7 @@ import logging
 from rl_trading.strategy.strategy import AbstractStrategy
 import gymnasium as gym
 from gymnasium import spaces
+import talib
 
 logger = logging.getLogger('root')
 
@@ -135,72 +136,136 @@ class TradingEnvActionDiscrete(SimulationEnvBase):
 
 
 
+class StockExchangeEnv(gym.Env):
+    def __init__(
+            self,
+            price_data: np.ndarray,
+            volume_data: np.ndarray,
+            initial_cash: int,
+            max_steps: int = 720,
+            trading_fee: float = 0.0
+    ):
+        super().__init__()
 
+        self.price_data = price_data
+        self.volume_data = volume_data
+        self.initial_cash = initial_cash
+        self.trading_fee = trading_fee
+        self.max_steps = max_steps
 
+        self.balance_history = []
+        self.action_history = []
+        self.reward_history = []
+        self.net_worth_changes = []
 
+        self.start_step = 0
+        self.current_step = 0
+        self.cash_balance = self.initial_cash
+        self.asset_holdings = 0
 
-def simulation(prices: np.ndarray, initial_balance: int, strategy: AbstractStrategy, fee: float = 0.0):
-    base_balance = initial_balance
-    quote_balance = 0
-    action = 0  # 0|1|-1 -> HOLD|BUY|SELL
-    current_price = prices[0]
-    max_drop = hwm = initial_balance
-    trajectory = []
+        # Define action space: 0 - hold, 1 - buy, 2 - sell
+        self.action_space = spaces.Discrete(3)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float32)
 
-    for price in tqdm(prices):
-        current_price = price
+        self.reset()
 
-        # BUY if sufficient funds
-        if action == 1 and base_balance > 0:
-            quote_balance = base_balance / current_price * (1 - fee)
-            base_balance = 0
-        # SELL if you have something to sell
-        elif action == -1 and quote_balance != 0:
-            base_balance = quote_balance * current_price * (1 - fee)
-            quote_balance = 0
+    def reset(self, *, seed=None, options=None):
+        if seed is not None:
+            rng = np.random.default_rng(seed=seed)
+            self.current_step = rng.integers(0, len(self.price_data) - self.max_steps)
+            self.start_step = self.current_step
+        else:
+            self.current_step = np.random.randint(len(self.price_data) - self.max_steps)
+            self.start_step = self.current_step
+        self.cash_balance = self.initial_cash
+        self.asset_holdings = 0
+        return self._get_observation(), {}
 
-        # Retrieve the action from the strategy given the current price
-        #
-        # The action is always performed in the next step.
-        # Which means that it will be performed with the price
-        # in the next minute that can is different from the
-        # price used for deciding the action.
-        action = strategy.get_action(current_price)
+    def step(self, action):
+        assert self.action_space.contains(action)
 
-        # Keep track of maximum drawdown, high watermark and trajectory
-        # (the minimum and maximum of the balance/position)
-        max_drop = min(base_balance + quote_balance * current_price, max_drop)
-        hwm = max(base_balance + quote_balance * current_price, hwm)
-        trajectory.append(base_balance + quote_balance * current_price)
+        current_price = self.price_data[self.current_step]
+        current_volume = self.volume_data[self.current_step]
 
-    # If after the end of the simulation I have some open position,
-    # close it for the current price
-    if quote_balance > 0:
-        base_balance = quote_balance * current_price * (1 - fee)
-    return base_balance, max_drop, hwm, np.array(trajectory)
+        self.balance_history.append(self.cash_balance + self.asset_holdings * current_price)
 
+        if action == 1:  # Buy
+            amount_to_buy = (1 * self.cash_balance) / current_price
+            cost = amount_to_buy * current_price
+            self.cash_balance -= cost
+            self.asset_holdings += amount_to_buy * (1 - self.trading_fee)
+            self.action_history.append(1)
+        elif action == 2:  # Sell
+            amount_to_sell = self.asset_holdings
+            revenue = amount_to_sell * current_price * (1 - self.trading_fee)
+            self.cash_balance += revenue
+            self.asset_holdings = 0
+            self.action_history.append(-1)
+        else:
+            self.action_history.append(0)
 
-def plot_sim_results(prices: np.ndarray, trajectory: np.ndarray, log_scale=False, twin_axes=False):
-    if not twin_axes:
-        plt.figure(figsize=(8, 6))
-        plt.plot(prices, label='Market price')
-        plt.plot(trajectory, label='Wallet balance')
-        plt.xlabel('Timestamp [s]')
-        plt.ylabel('Value [$]')
-        if log_scale:
-            plt.yscale('log')
-        plt.legend()
-    else:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.plot(prices, label='Market price', color='C0')
-        ax.set_xlabel('Timestamp [s]')
-        ax.set_ylabel('Market price [$]')
-        ax.legend()
+        self.current_step += 1
+        done = self.current_step == self.start_step + self.max_steps
+        reward = self._get_reward()
+        self.reward_history.append(reward)
 
-        ax2 = ax.twinx()
-        ax2.plot(trajectory, label='Wallet balance', color='C1')
-        ax2.set_ylabel('Wallet balance [$]')
-        ax2.legend()
+        return self._get_observation(), reward, done, False, {}
 
-    plt.title('Simulation results')
-    plt.show()
+    def _get_observation(self):
+        current_price = self.price_data[self.current_step]
+        current_volume = self.volume_data[self.current_step]
+
+        short_mavg = talib.SMA(self.price_data[self.start_step:self.current_step + 1], timeperiod=5)[-1] if self.current_step - self.start_step >= 4 else current_price
+        long_mavg = talib.SMA(self.price_data[self.start_step:self.current_step + 1], timeperiod=20)[-1] if self.current_step - self.start_step >= 19 else current_price
+
+        if self.current_step - self.start_step >= 26:
+            macd, macd_signal, _ = talib.MACD(self.price_data[self.start_step:self.current_step + 1], fastperiod=12, slowperiod=26, signalperiod=9)
+            macd_diff = macd[-1] - macd_signal[-1]
+            if np.isnan(macd_diff):
+                macd_diff = 0
+        else:
+            macd_diff = 0
+
+        rsi = talib.RSI(self.price_data[self.start_step:self.current_step + 1], timeperiod=14)[-1] if self.current_step - self.start_step >= 14 else 50
+
+        ema = talib.EMA(self.price_data[self.start_step:self.current_step + 1], timeperiod=12)[-1] if self.current_step - self.start_step >= 11 else current_price
+
+        observation = np.array([current_price, current_volume, short_mavg, long_mavg, macd_diff, rsi, ema, self.cash_balance, self.asset_holdings])
+        return observation
+
+    def _get_reward(self):
+        current_net_worth_change = self.cash_balance + self.asset_holdings * self.price_data[self.current_step] - self.initial_cash
+        if len(self.net_worth_changes) > 0:
+            previous_net_worth_change = self.net_worth_changes[-1]
+        else:
+            previous_net_worth_change = 0
+        self.net_worth_changes.append(current_net_worth_change)  # Add the net worth change to the list
+        return current_net_worth_change - previous_net_worth_change
+
+    def render(self, mode='human'):
+        if self.current_step == self.start_step:
+            self.fig, (self.ax1, self.ax2, self.ax3, self.ax4) = \
+                plt.subplots(4, 1, figsize=(10, 12), gridspec_kw={'height_ratios': [3, 3, 3, 1]}, sharex=True)
+            self.ax1.set_title('Stock Price')
+            self.ax1.set_xlabel('Step')
+            self.ax1.set_ylabel('Price')
+
+            self.ax2.set_title('Portfolio Value')
+            self.ax2.set_xlabel('Step')
+            self.ax2.set_ylabel('Amount')
+
+            self.ax3.set_title('Rewards')
+            self.ax3.set_xlabel('Step')
+            self.ax3.set_ylabel('Sharpe Ratio')
+
+            self.ax4.set_title('Action History')
+            self.ax4.set_xlabel('Step')
+            self.ax4.set_ylabel('Action')
+        else:
+            x_data = np.arange(self.current_step - self.start_step)
+            y_data = self.price_data[self.start_step:self.current_step]
+            self.ax1.plot(x_data, y_data, color='C0')
+            self.ax2.plot(x_data, self.balance_history[:self.current_step - self.start_step], color='C1')
+            self.ax3.plot(x_data, self.reward_history[:self.current_step - self.start_step], color='C1')
+            self.ax4.plot(x_data, self.action_history[:self.current_step - self.start_step], color='C1')
+            plt.pause(0.01)
