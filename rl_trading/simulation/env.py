@@ -46,7 +46,7 @@ class StateConfig:
     account_state: List[str] = field(default_factory=lambda: ['cash_balance', 'asset_holdings'])
 
     def __len__(self) -> int:
-        return len(self.market_state) + sum([2 if ind == BBANDS else 1 for ind, _, _ in self.technical_indicators]) + len(self.account_state)
+        return len(self.market_state) + len(self.technical_indicators) + len(self.account_state)
 
 
 class StockExchangeEnv0(gym.Env):
@@ -162,7 +162,7 @@ class StockExchangeEnv0(gym.Env):
 
     def _get_observation(self):
         # Market state
-        market_state = [self.market_data[self.sim_granularity][key].iloc[self.current_idx]
+        market_state = [self.market_data[self.sim_granularity][key].iloc[self.current_idx] / self.price_data[self.sim_granularity][self.current_idx]
                         for key in self.state_config.market_state]
 
         # Technical indicators
@@ -186,13 +186,14 @@ class StockExchangeEnv0(gym.Env):
                     self.price_data[gran][self.start_idx - ind_padding: self.current_idx + 1],
                     **ind_params
                 )
-            technical_indicators.extend(ti)
+            technical_indicators.append(ti)
 
         if any(np.isnan(technical_indicators)):
             raise ValueError(f'NaN value encountered when computing technical indicators: {technical_indicators}')
 
         # Account state
         account_state = [getattr(self, attr_) for attr_ in self.state_config.account_state]
+        account_state[0] /= self.initial_cash
 
         observation = np.array(market_state + technical_indicators + account_state)
         return observation
