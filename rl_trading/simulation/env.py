@@ -1,3 +1,4 @@
+import random
 from dataclasses import dataclass, field
 from typing import Optional, Union, List, Tuple, Dict, Callable
 import pandas as pd
@@ -55,7 +56,9 @@ class StockExchangeEnv0(gym.Env):
         data_file_path: str = '/home/fassty/Devel/school/diploma_thesis/code/data/binance_BTC_USDT.h5',
         sim_config: Optional[dict] = None,
         exchange_config: Optional[dict] = None,
-        state_config: Optional[dict] = None
+        state_config: Optional[dict] = None,
+        # For debugging purposes, limit the sampled indices to set values
+        _idxs_range: Optional[List[int]] = None
     ):
         sim_config = SimulationConfig(**sim_config) if sim_config is not None else SimulationConfig()
         exchange_config = ExchangeConfig(**exchange_config) if exchange_config is not None else ExchangeConfig()
@@ -97,6 +100,8 @@ class StockExchangeEnv0(gym.Env):
         self.reward_history = []
         self.net_worth_changes = []
 
+        self._idxs_range = _idxs_range
+
         self.reset()
 
     def _calculate_padding(self, sim_config, state_config):
@@ -108,12 +113,17 @@ class StockExchangeEnv0(gym.Env):
         return int(max_padding)
 
     def reset(self, *, seed=None, options=None):
-        if seed is not None:
-            rng = np.random.default_rng(seed=seed)
+        if self._idxs_range:
+            self.start_idx = random.choice(self._idxs_range)
+            # Check that the selected index is from valid range of possible values
+            assert self.padding <= self.start_idx <= len(self.price_data[self.sim_granularity]) - self.max_steps - 1
         else:
-            rng = self.np_random
-        # -1 to prevent IndexError when accessing the next price
-        self.start_idx = rng.integers(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps - 1)
+            if seed is not None:
+                rng = np.random.default_rng(seed=seed)
+            else:
+                rng = self.np_random
+            # -1 to prevent IndexError when accessing the next price
+            self.start_idx = rng.integers(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps - 1)
         self.i = 0
         self.cash_balance = self.initial_cash
         self.asset_holdings = 0
