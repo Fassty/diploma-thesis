@@ -4,34 +4,26 @@ from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.algorithms.dqn import DQNConfig
 from ray.rllib.algorithms.apex_dqn import ApexDQNConfig
 from ray.rllib.algorithms.r2d2 import R2D2Config
+from ray.rllib.algorithms.a3c import A3CConfig
+from ray.rllib.algorithms.sac import SACConfig
 
 from rl_trading.data.indicators import *
 from rl_trading.simulation.env import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_name", default='R2D2_stored', type=str, help="Experiment name.")
-parser.add_argument("--save_dir", default='../exp_results/discrete_env_21ind_normalized_fee1e-3', type=str, help="Where to store the experiments.")
-parser.add_argument("--algo", default='R2D2', type=str, help='Which algorithm to use for the experiment.')
+parser.add_argument("--exp_name", default='SAC_temp_activation', type=str, help="Experiment name.")
+parser.add_argument("--save_dir", default='../exp_results/baseline_experiment/SAC', type=str, help="Where to store the experiments.")
+parser.add_argument("--algo", default='SAC', type=str, help='Which algorithm to use for the experiment.')
 parser.add_argument("--iterations", default=1000, type=int, help="Number of training iterations to run.")
-parser.add_argument("--num_samples", default=4, type=int, help="Number of times to run each experiment.")
+parser.add_argument("--num_samples", default=1, type=int, help="Number of times to run each experiment.")
 
 
 def main(args: argparse.Namespace):
     config = (
-        R2D2Config()
-        .rollouts(num_rollout_workers=5, num_envs_per_worker=8)
-        .training(model={'use_lstm': True,
-                         'lstm_use_prev_action': True,
-                         'lstm_use_prev_reward': True,
-                         'max_seq_len': 80},
-                  replay_buffer_config={'replay_burn_in': 40, 'capacity': 100_000},
-                  zero_init_states=False,
-                  target_network_update_freq=24_000,
-                  train_batch_size=512
-                  )
-        .exploration(exploration_config={'epsilon_timesteps': 15_000_000})
-        .resources(num_gpus=1)
+        SACConfig()
+        .rollouts(num_rollout_workers=1, num_envs_per_worker=1)
+        .resources(num_gpus=0.2, num_cpus_per_worker=0.5)
         .environment(env='StockExchangeEnv-v0',
                      env_config={
                          'state_config': {
@@ -52,11 +44,14 @@ def main(args: argparse.Namespace):
                                 (BBANDS, dict(timeperiod=20), '1d'),
                                 (MACD_DIFF, dict(fastperiod=12, slowperiod=26, signalperiod=9, normalize=True), '1d'),
                              ]},
-                         'exchange_config': {'maker_fee': 1e-3}
-
+                         #'exchange_config': {'maker_fee': 1e-3}
+                         '_idxs_range': [288000]
                      })
-        .reporting(min_sample_timesteps_per_iteration=24000)
-        .evaluation(evaluation_interval=25, evaluation_duration=40)
+        .training(initial_alpha=tune.grid_search([2.0, 1.0, 0.5, 0.1]),
+                  q_model_config={'fcnet_activation': 'tanh'},
+                  policy_model_config={'fcnet_activation': 'tanh'})
+        .reporting(min_sample_timesteps_per_iteration=1440)
+        .evaluation(evaluation_interval=25, evaluation_duration=20, evaluation_config={'explore': False})
     )
 
     tuner = tune.Tuner(
