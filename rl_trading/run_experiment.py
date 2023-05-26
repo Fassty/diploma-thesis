@@ -12,17 +12,18 @@ from rl_trading.simulation.env import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_name", default='SAC_temp_activation', type=str, help="Experiment name.")
-parser.add_argument("--save_dir", default='../exp_results/baseline_experiment/SAC', type=str, help="Where to store the experiments.")
-parser.add_argument("--algo", default='SAC', type=str, help='Which algorithm to use for the experiment.')
-parser.add_argument("--iterations", default=1000, type=int, help="Number of training iterations to run.")
-parser.add_argument("--num_samples", default=1, type=int, help="Number of times to run each experiment.")
+parser.add_argument("--exp_name", default='DQN_1M_iterations_{}days', type=str, help="Experiment name.")
+parser.add_argument("--save_dir", default='/home/fassty/Devel/school/diploma_thesis/code/exp_results/baseline_experiment/DQN', type=str, help="Where to store the experiments.")
+parser.add_argument("--algo", default='DQN', type=str, help='Which algorithm to use for the experiment.')
+parser.add_argument("--iterations", default=50, type=int, help="Number of training iterations to run.")
+parser.add_argument("--num_samples", default=3, type=int, help="Number of times to run each experiment.")
+parser.add_argument("--n_days", default=7, type=int, help="Number of days to use for training.")
 
 
 def main(args: argparse.Namespace):
     config = (
-        SACConfig()
-        .rollouts(num_rollout_workers=1, num_envs_per_worker=1)
+        DQNConfig()
+        .rollouts(num_rollout_workers=2, num_envs_per_worker=8)
         .resources(num_gpus=0.2, num_cpus_per_worker=0.5)
         .environment(env='StockExchangeEnv-v0',
                      env_config={
@@ -44,20 +45,17 @@ def main(args: argparse.Namespace):
                                 (BBANDS, dict(timeperiod=20), '1d'),
                                 (MACD_DIFF, dict(fastperiod=12, slowperiod=26, signalperiod=9, normalize=True), '1d'),
                              ]},
-                         #'exchange_config': {'maker_fee': 1e-3}
-                         '_idxs_range': [288000]
+                         #'exchange_config': {'maker_fee': 1e-3},
+                         '_idxs_range': np.linspace(288000, 2792281 - 1440 - 1, args.n_days, dtype=int).tolist()
                      })
-        .training(initial_alpha=tune.grid_search([2.0, 1.0, 0.5, 0.1]),
-                  q_model_config={'fcnet_activation': 'tanh'},
-                  policy_model_config={'fcnet_activation': 'tanh'})
-        .reporting(min_sample_timesteps_per_iteration=1440)
-        .evaluation(evaluation_interval=25, evaluation_duration=20, evaluation_config={'explore': False})
+        .reporting(min_sample_timesteps_per_iteration=2 * 8 * 1440)
+        .evaluation(evaluation_interval=5, evaluation_duration=20, evaluation_config={'explore': False})
     )
 
     tuner = tune.Tuner(
         args.algo,
         run_config=air.RunConfig(
-            name=args.exp_name,
+            name=args.exp_name.format(args.n_days),
             local_dir=args.save_dir,
             stop={'training_iteration': args.iterations},
             checkpoint_config=air.CheckpointConfig(
