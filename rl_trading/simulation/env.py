@@ -71,7 +71,7 @@ class StockExchangeEnv0(gym.Env):
         self.max_steps = sim_config.max_steps
         self.sim_granularity = sim_config.granularity
 
-        # Load markt data
+        # Load market data
         # ================
         data_provider = MarketDataProvider(data_file_path)
         self.market_data = data_provider.get_market_data(self.sim_granularity, state_config.technical_indicators)
@@ -255,3 +255,40 @@ class StockExchangeEnv0(gym.Env):
                 ax.relim()
                 ax.autoscale_view(True, True, True)
             plt.pause(0.01)
+
+
+class StockExchangeEnv1(StockExchangeEnv0):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+
+    def step(self, action: np.ndarray):
+        assert self.action_space.contains(action)
+        action = action[0]
+
+        current_price = self.price_data[self.sim_granularity][self.current_idx]
+        next_price = self.price_data[self.sim_granularity][self.current_idx + 1]
+        slippage = current_price * self.slippage * np.sign(next_price - current_price)
+        execution_price = current_price + slippage
+
+        self.balance_history.append(self.cash_balance + self.asset_holdings * current_price)
+
+        if action > 0:
+            amount_to_buy = (action * self.cash_balance) / execution_price
+            cost = amount_to_buy * execution_price
+            self.cash_balance -= cost
+            self.asset_holdings += amount_to_buy * (1 - self.trading_fee)
+        elif action < 0:
+            amount_to_sell = self.asset_holdings * np.abs(action)
+            revenue = amount_to_sell * execution_price * (1 - self.trading_fee)
+            self.cash_balance += revenue
+            self.asset_holdings -= amount_to_sell
+        self.action_history.append(action)
+
+        self.i += 1
+        done = self.i == self.max_steps
+        reward = self._get_reward()
+        self.reward_history.append(reward)
+
+        return self._get_observation(), reward, done, False, {}
