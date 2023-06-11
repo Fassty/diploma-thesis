@@ -13,31 +13,28 @@ from rl_trading.simulation.env import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--exp_name", default='SAC_network_size', type=str, help="Experiment name.")
-parser.add_argument("--save_dir", default='/home/fassty/Devel/school/diploma_thesis/code/exp_results/continuous_env/SAC', type=str, help="Where to store the experiments.")
-parser.add_argument("--algo", default='SAC', type=str, help='Which algorithm to use for the experiment.')
-parser.add_argument("--iterations", default=100, type=int, help="Number of training iterations to run.")
+parser.add_argument("--exp_name", default='R2D2_prod', type=str, help="Experiment name.")
+parser.add_argument("--save_dir", default='/home/fassty/Devel/school/diploma_thesis/code/exp_results/discrete_18ind_norm_fee1e-3/', type=str, help="Where to store the experiments.")
+parser.add_argument("--algo", default='R2D2', type=str, help='Which algorithm to use for the experiment.')
+parser.add_argument("--iterations", default=500, type=int, help="Number of training iterations to run.")
 parser.add_argument("--num_samples", default=1, type=int, help="Number of times to run each experiment.")
 parser.add_argument("--n_days", default=None, type=int, help="Number of days to use for training.")
 
 
 def main(args: argparse.Namespace):
     config = (
-        SACConfig()
-        .rollouts(num_rollout_workers=2, num_envs_per_worker=8)
-        .resources(num_gpus=0.2, num_cpus_per_worker=0.5)
-        .training(
-            initial_alpha=0.1,
-            q_model_config={
-                'fcnet_hiddens': tune.grid_search([[256, 256, 256], [1024, 1024], [1024, 1024, 1024]])},
-            policy_model_config={
-                'fcnet_hiddens': tune.grid_search([[256, 256], [256, 256, 256], [1024, 1024], [1024, 1024, 1024]])}
-        )
-        .environment(env='StockExchangeEnv-v1',
+        R2D2Config()
+        .rollouts(num_rollout_workers=4, num_envs_per_worker=16)
+        .resources(num_gpus=0.2, num_cpus_per_worker=1)
+        .training(model={'use_lstm': True, 'max_seq_len': 80, 'lstm_use_prev_action': True, 'lstm_use_prev_reward': True},
+                  replay_buffer_config={'replay_burn_in': 40},
+                  zero_init_states=True)
+        .environment(env='StockExchangeEnv-v0',
                      env_config={
                          'state_config': {
                              'market_state': ['vwap'],
                              'technical_indicators': [
+                                (RPC, {}, '1min'),
                                 (EMA, dict(timeperiod=5, normalize=True), '1min'),
                                 (EMA, dict(timeperiod=13, normalize=True), '1min'),
                                 (RSI, dict(timeperiod=7, normalize=True), '1min'),
@@ -54,10 +51,10 @@ def main(args: argparse.Namespace):
                                 (MACD_DIFF, dict(fastperiod=12, slowperiod=26, signalperiod=9, normalize=True), '1d'),
                              ]},
                          'exchange_config': {'maker_fee': 1e-3},
-                         #'_idxs_range': np.linspace(288000, 2792281 - 1440 - 1, args.n_days, dtype=int).tolist()
+                         #'_n_days': tune.grid_search(np.geomspace(1, 365 * 4, 10, dtype=int).tolist())
                      })
-        .reporting(min_sample_timesteps_per_iteration=2 * 8 * 1440)
-        .evaluation(evaluation_interval=10, evaluation_duration=20)
+        .reporting(min_sample_timesteps_per_iteration=4 * 16 * 1440)
+        .evaluation(evaluation_interval=25, evaluation_duration=32)
     )
 
     tuner = tune.Tuner(

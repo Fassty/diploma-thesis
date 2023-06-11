@@ -2,11 +2,15 @@ import numpy as np
 import pandas as pd
 import talib
 from typing import Callable, Dict
-import numba
 
 
 TechnicalIndicator = Callable
 IndicatorParams = Dict[str, int]
+
+
+def RPC(data: np.ndarray, scale: float = 1.0):
+    rpc = (data[-1] - data[-2]) / data[-2]
+    return rpc * scale
 
 
 def SMA(data: np.ndarray, timeperiod: int = 30, normalize=False):
@@ -43,6 +47,7 @@ def BBANDS(data: np.ndarray, timeperiod: int = 5, nbdevup: int = 2, nbdevdn: int
 
 # TODO: Add Stochastic Oscillator - requires minutely OHLC that I need to get somewhere
 indicator_padding: Dict[TechnicalIndicator, Callable[[Dict], int]] = {
+    RPC.__name__: lambda _: 1,
     SMA.__name__: lambda config: config['timeperiod'],
     EMA.__name__: lambda config: config['timeperiod'],
     RSI.__name__: lambda config: config['timeperiod'],

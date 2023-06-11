@@ -2,14 +2,14 @@ import random
 from dataclasses import dataclass, field
 from typing import Optional, Union, List, Tuple, Dict, Callable
 import pandas as pd
-import numba
 
 import matplotlib.pyplot as plt
 import numpy as np
 from gymnasium.envs.registration import EnvSpec
 
+from rl_trading.data.api import BinanceAPI
 from rl_trading.data.indicators import *
-from rl_trading.data.provider import MarketDataProvider
+from rl_trading.data.provider import MarketDataProvider, LiveDataProvider
 from rl_trading.enums import Action
 import logging
 import gymnasium as gym
@@ -58,7 +58,7 @@ class StockExchangeEnv0(gym.Env):
         exchange_config: Optional[dict] = None,
         state_config: Optional[dict] = None,
         # For debugging purposes, limit the sampled indices to set values
-        _idxs_range: Optional[List[int]] = None
+        _n_days: Optional[int] = None
     ):
         sim_config = SimulationConfig(**sim_config) if sim_config is not None else SimulationConfig()
         exchange_config = ExchangeConfig(**exchange_config) if exchange_config is not None else ExchangeConfig()
@@ -100,7 +100,10 @@ class StockExchangeEnv0(gym.Env):
         self.reward_history = []
         self.net_worth_changes = []
 
-        self._idxs_range = _idxs_range
+        if _n_days:
+            self._idxs_range = np.random.randint(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps * _n_days - 1, _n_days)
+        else:
+            self._idxs_range = None
 
         self.reset()
 
@@ -113,10 +116,8 @@ class StockExchangeEnv0(gym.Env):
         return int(max_padding)
 
     def reset(self, *, seed=None, options=None):
-        if self._idxs_range:
+        if self._idxs_range is not None:
             self.start_idx = random.choice(self._idxs_range)
-            # Check that the selected index is from valid range of possible values
-            assert self.padding <= self.start_idx <= len(self.price_data[self.sim_granularity]) - self.max_steps - 1
         else:
             if seed is not None:
                 rng = np.random.default_rng(seed=seed)
@@ -292,3 +293,78 @@ class StockExchangeEnv1(StockExchangeEnv0):
         self.reward_history.append(reward)
 
         return self._get_observation(), reward, done, False, {}
+
+
+class LiveTradingEnv:
+    def __init__(
+        self,
+        api: BinanceAPI,
+        data_file_path: str,
+        state_config: StateConfig,
+        trade_frequency: str = '1min',
+    ):
+        self.api = api
+        self.padding = self._calculate_padding(trade_frequency, state_config)
+        self.data_provider = LiveDataProvider(data_file_path, self.padding)
+        self.data_provider.update_data(self.api)
+        self.state_config = state_config
+        self.trade_frequency = trade_frequency
+
+        self.initial_cash, self.asset_holdings = self._get_balance_and_position()
+        self.cash_balance = self.initial_cash
+
+        self.previous_net_worth_change = 0
+
+    def _get_balance_and_position(self):
+        account_info = self.api.get_account_info()
+
+        balances_df = pd.DataFrame(account_info['balances'])
+        usdt_balance = float(balances_df[balances_df['asset'] == 'USDT']['free'].item())
+        btc_balance = float(balances_df[balances_df['asset'] == 'BTC']['free'].item())
+
+        return usdt_balance, btc_balance
+
+    def _calculate_padding(self, granularity, state_config):
+        max_padding = 0
+        for ind, ind_cfg, gran in state_config.technical_indicators:
+            padding = indicator_padding[ind.__name__](ind_cfg)
+            padding *= granularity_convert(gran, granularity)
+            max_padding = max(max_padding, padding)
+        return int(max_padding)
+
+    def get_current_state(self):
+        self.data_provider.update_data(self.api)
+
+        market_data = self.data_provider.get_market_data(self.trade_frequency, self.state_config.technical_indicators)
+        price_data = {gran: np.array(data.iloc[-self.padding - 1:]['price']) for gran, data in market_data.items()}
+
+        # Market state
+        market_state = [market_data[self.trade_frequency][key].iloc[-1] / price_data[self.trade_frequency][-1]
+                        for key in self.state_config.market_state]
+
+        # Technical indicators
+        # Compute the technical indicators for the current trading window and get the value for current state
+        technical_indicators = []
+        for ind_func, ind_params, gran in self.state_config.technical_indicators:
+            ind_padding = indicator_padding[ind_func.__name__](ind_params)
+            ti = ind_func(price_data[gran][-ind_padding - 1:], **ind_params)
+            technical_indicators.append(ti)
+
+        if any(np.isnan(technical_indicators)):
+            raise ValueError(f'NaN value encountered when computing technical indicators: {technical_indicators}')
+
+        # Account state
+        self.cash_balance, self.asset_holdings = self._get_balance_and_position()
+        account_state = [getattr(self, attr_) for attr_ in self.state_config.account_state]
+        account_state[0] /= self.initial_cash
+
+        observation = np.array(market_state + technical_indicators + account_state)
+        return observation, price_data[self.trade_frequency][-1]
+
+    def get_reward(self, last_price: float):
+        current_net_worth_change = self.cash_balance + self.asset_holdings * last_price - self.initial_cash
+        reward = current_net_worth_change - self.previous_net_worth_change
+
+        self.previous_net_worth_change = current_net_worth_change
+
+        return reward
