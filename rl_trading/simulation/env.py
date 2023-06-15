@@ -1,3 +1,4 @@
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Optional, Union, List, Tuple, Dict, Callable
@@ -58,7 +59,8 @@ class StockExchangeEnv0(gym.Env):
         exchange_config: Optional[dict] = None,
         state_config: Optional[dict] = None,
         # For debugging purposes, limit the sampled indices to set values
-        _n_days: Optional[int] = None
+        _n_days: Optional[int] = None,
+        seed: Optional[int] = None
     ):
         sim_config = SimulationConfig(**sim_config) if sim_config is not None else SimulationConfig()
         exchange_config = ExchangeConfig(**exchange_config) if exchange_config is not None else ExchangeConfig()
@@ -101,7 +103,8 @@ class StockExchangeEnv0(gym.Env):
         self.net_worth_changes = []
 
         if _n_days:
-            self._idxs_range = np.random.randint(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps * _n_days - 1, _n_days)
+            rng = np.random.default_rng(seed=seed)
+            self._idxs_range = rng.integers(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps * _n_days - 1, _n_days)
         else:
             self._idxs_range = None
 
