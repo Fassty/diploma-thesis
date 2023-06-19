@@ -127,7 +127,7 @@ class StockExchangeEnv0(gym.Env):
             else:
                 rng = self.np_random
             # -1 to prevent IndexError when accessing the next price
-            self.start_idx = rng.integers(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps - 1)
+            self.start_idx = rng.integers(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps)
         self.i = 0
         self.cash_balance = self.initial_cash
         self.asset_holdings = 0
@@ -220,6 +220,7 @@ class StockExchangeEnv0(gym.Env):
             previous_net_worth_change = 0
         self.net_worth_changes.append(current_net_worth_change)  # Add the net worth change to the list
         reward = current_net_worth_change - previous_net_worth_change
+        reward += np.clip(current_net_worth_change, -np.inf, 0)
         return reward
 
     def render(self, mode='human'):
