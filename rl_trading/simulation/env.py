@@ -114,7 +114,8 @@ class StockExchangeEnv0(gym.Env):
 
         self.reset()
 
-    def _calculate_padding(self, sim_config, state_config):
+    @staticmethod
+    def _calculate_padding(sim_config, state_config):
         max_padding = 0
         for ind, ind_cfg, gran in state_config.technical_indicators:
             padding = indicator_padding[ind.__name__](ind_cfg)
