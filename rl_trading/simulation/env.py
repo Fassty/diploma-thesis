@@ -27,6 +27,8 @@ class SimulationConfig:
     granularity: str = '1min'
     max_steps: int = 1440        # default 1 day (24 * 60 minutes)
     initial_cash: int = 10_000   # default 10,000$
+    reward_type: str = 'absolute'  # default 'absolute'
+    reward_scale: float = 1.0
 
 
 @dataclass
@@ -72,6 +74,8 @@ class StockExchangeEnv0(gym.Env):
         self.initial_cash = sim_config.initial_cash
         self.max_steps = sim_config.max_steps
         self.sim_granularity = sim_config.granularity
+        self.reward_type = sim_config.reward_type
+        self.reward_scale = sim_config.reward_scale
 
         # Load market data
         # ================
@@ -213,15 +217,19 @@ class StockExchangeEnv0(gym.Env):
         return observation
 
     def _get_reward(self):
-        current_net_worth_change = self.cash_balance + self.asset_holdings * self.price_data[self.sim_granularity][self.current_idx] - self.initial_cash
-        if len(self.net_worth_changes) > 0:
-            previous_net_worth_change = self.net_worth_changes[-1]
+        current_net_worth = self.cash_balance + self.asset_holdings * self.price_data[self.sim_granularity][self.current_idx]
+        if len(self.net_worth_history) > 0:
+            previous_net_worth = self.net_worth_history[-1]
         else:
-            previous_net_worth_change = 0
-        self.net_worth_changes.append(current_net_worth_change)  # Add the net worth change to the list
-        reward = current_net_worth_change - previous_net_worth_change
-        reward += np.clip(current_net_worth_change, -np.inf, 0)
-        return reward
+            previous_net_worth = self.initial_cash
+        self.net_worth_history.append(current_net_worth)  # Add the net worth change to the list
+        if self.reward_type == 'absolute':
+            reward = current_net_worth - previous_net_worth
+        elif self.reward_type == 'relative':
+            reward = (current_net_worth - previous_net_worth) / previous_net_worth
+        else:
+            raise ValueError(f'Unknown reward type: {self.reward_type}')
+        return reward * self.reward_scale
 
     def render(self, mode='human'):
         if self.i == 0:
