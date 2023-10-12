@@ -104,7 +104,7 @@ class StockExchangeEnv0(gym.Env):
         self.balance_history = []
         self.action_history = []
         self.reward_history = []
-        self.net_worth_changes = []
+        self.net_worth_history = []
 
         if _n_days:
             rng = np.random.default_rng(seed=seed)
@@ -139,7 +139,7 @@ class StockExchangeEnv0(gym.Env):
         self.balance_history = []
         self.action_history = []
         self.reward_history = []
-        self.net_worth_changes = []
+        self.net_worth_history = []
         return self._get_observation(), {}
 
     @property
