@@ -155,7 +155,9 @@ class StockExchangeEnv0(gym.Env):
         slippage = current_price * self.slippage * np.sign(next_price - current_price)
         execution_price = current_price + slippage
 
-        self.balance_history.append(self.cash_balance + self.asset_holdings * current_price)
+        current_balance = self.cash_balance + self.asset_holdings * current_price
+        self.balance_history.append(current_balance)
+        truncated = False # current_balance < 0.8 * self.initial_cash
 
         if action == Action.BUY:
             amount_to_buy = (1 * self.cash_balance) / execution_price
@@ -175,9 +177,10 @@ class StockExchangeEnv0(gym.Env):
         self.i += 1
         done = self.i == self.max_steps
         reward = self._get_reward()
+        # TODO: divide by reward_scale?
         self.reward_history.append(reward)
 
-        return self._get_observation(), reward, done, False, {}
+        return self._get_observation(), reward, done, truncated, {}
 
     def _get_observation(self):
         # Market state
