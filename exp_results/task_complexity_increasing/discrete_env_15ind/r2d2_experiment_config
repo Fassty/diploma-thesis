@@ -1,0 +1,36 @@
+config = (
+    args.algo.get_default_config()
+    .rollouts(num_rollout_workers=args.num_workers, num_envs_per_worker=args.num_envs)
+    .resources(num_gpus=1, num_cpus_per_worker=1)
+    .training(model={'use_lstm': True, 'max_seq_len': 80, 'lstm_use_prev_action': True, 'lstm_use_prev_reward': True},
+              replay_buffer_config={'replay_burn_in': 40},
+              zero_init_states=True)
+    .exploration(exploration_config={'epsilon_timesteps': 5_000_000, 'final_epsilon': 0.001})
+    .environment(env='StockExchangeEnv-v0',
+                 env_config={
+                     'sim_config': {'max_steps': args.episode_length},
+                     'state_config': {
+                         'market_state': ['vwap'],
+                         'technical_indicators': [
+                            (RPC, {}, '1min'),
+                            (EMA, dict(timeperiod=5, normalize=False), '1min'),
+                            (EMA, dict(timeperiod=13, normalize=False), '1min'),
+                            (RSI, dict(timeperiod=7, normalize=False), '1min'),
+                            (BBANDS, dict(timeperiod=10), '1min'),
+                            (EMA, dict(timeperiod=20, normalize=False), '1h'),
+                            (EMA, dict(timeperiod=50, normalize=False), '1h'),
+                            (RSI, dict(timeperiod=14, normalize=False), '1h'),
+                            (BBANDS, dict(timeperiod=20), '1h'),
+                            (MACD_DIFF, dict(fastperiod=12, slowperiod=26, signalperiod=9, normalize=False), '1h'),
+                            (EMA, dict(timeperiod=50, normalize=False), '1d'),
+                            (EMA, dict(timeperiod=200, normalize=False), '1d'),
+                            (RSI, dict(timeperiod=14, normalize=False), '1d'),
+                            (BBANDS, dict(timeperiod=20), '1d'),
+                            (MACD_DIFF, dict(fastperiod=12, slowperiod=26, signalperiod=9, normalize=False), '1d'),
+                         ]},
+                     'exchange_config': {'maker_fee': tune.grid_search([0, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2])},
+                 })
+    .reporting(min_sample_timesteps_per_iteration=args.num_workers * args.num_envs * args.episode_length,
+               metrics_num_episodes_for_smoothing=args.num_workers * args.num_envs)
+    .evaluation(evaluation_interval=1, evaluation_duration=10, evaluation_config={'explore': False})
+)

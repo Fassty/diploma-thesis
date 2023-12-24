@@ -1,11 +1,13 @@
 import os
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Union, List, Tuple, Dict, Callable
 import pandas as pd
 
 import matplotlib.pyplot as plt
 import numpy as np
+import shortuuid
 from gymnasium.envs.registration import EnvSpec
 
 from rl_trading.data.api import BinanceAPI
@@ -25,9 +27,9 @@ logger = logging.getLogger('root')
 @dataclass
 class SimulationConfig:
     granularity: str = '1min'
-    max_steps: int = 1440        # default 1 day (24 * 60 minutes)
-    initial_cash: int = 10_000   # default 10,000$
-    reward_type: str = 'absolute'  # default 'absolute'
+    max_steps: int = 1440           # default 1 day (24 * 60 minutes)
+    initial_cash: int = 10_000      # default 10,000$
+    reward_type: str = 'absolute'   # default 'absolute'
     reward_scale: float = 1.0
 
 
@@ -56,10 +58,12 @@ class StateConfig:
 class StockExchangeEnv0(gym.Env):
     def __init__(
         self,
-        data_file_path: str = '/home/fassty/Devel/school/diploma_thesis/code/data/binance_BTC_USDT.h5',
+        data_file_path: str = '/home/fassty/Devel/school/diploma_thesis/code/data/train_data.h5',
         sim_config: Optional[dict] = None,
         exchange_config: Optional[dict] = None,
         state_config: Optional[dict] = None,
+        stage: str = 'train',
+        eval_period: int = 1440,  # default 1 day
         # For debugging purposes, limit the sampled indices to set values
         _n_days: Optional[int] = None,
         seed: Optional[int] = None
@@ -82,6 +86,8 @@ class StockExchangeEnv0(gym.Env):
         data_provider = MarketDataProvider(data_file_path)
         self.market_data = data_provider.get_market_data(self.sim_granularity, state_config.technical_indicators)
         self.price_data = {gran: data['price'].to_numpy() for gran, data in self.market_data.items()}
+        self.stage = stage
+        self.eval_period = eval_period
 
         # Setup exchange params
         # ================
@@ -132,7 +138,12 @@ class StockExchangeEnv0(gym.Env):
             else:
                 rng = self.np_random
             # -1 to prevent IndexError when accessing the next price
-            self.start_idx = rng.integers(self.padding, len(self.price_data[self.sim_granularity]) - self.max_steps)
+            if self.stage == 'train':
+                end_padding = self.max_steps + self.eval_period
+                self.start_idx = rng.integers(self.padding, len(self.price_data[self.sim_granularity]) - end_padding)
+            else:
+                self.max_steps = self.eval_period
+                self.start_idx = len(self.price_data[self.sim_granularity]) - self.eval_period - 1
         self.i = 0
         self.cash_balance = self.initial_cash
         self.asset_holdings = 0
@@ -331,6 +342,9 @@ class LiveTradingEnv:
 
         self.previous_net_worth_change = 0
 
+        self._instance_uuid = shortuuid.uuid()
+        self._logger = logging.getLogger(f'{self.__class__.__name__}:uuid={self._instance_uuid}')
+
     def _get_balance_and_position(self):
         account_info = self.api.get_account_info()
 
@@ -384,3 +398,75 @@ class LiveTradingEnv:
         self.previous_net_worth_change = current_net_worth_change
 
         return reward
+
+
+class BacktestingEnv:
+    def __init__(
+        self,
+        data_file_path: str,
+        state_config: StateConfig,
+        trade_frequency: str = '1min',
+        initial_cash: int = 10_000
+    ):
+        self.padding = self._calculate_padding(trade_frequency, state_config)
+        self.state_config = state_config
+        self.trade_frequency = trade_frequency
+        self.provider = MarketDataProvider(data_file_path)
+
+        # Initialize the data cache
+        self.provider.get_market_data(self.trade_frequency, self.state_config.technical_indicators)
+
+        self.initial_cash, self.asset_holdings = initial_cash, 0
+        self.cash_balance = self.initial_cash
+
+        self.previous_net_worth = 0
+
+        self._instance_uuid = shortuuid.uuid()
+        self._logger = logging.getLogger(f'{self.__class__.__name__}:uuid={self._instance_uuid}')
+
+    def _calculate_padding(self, granularity, state_config):
+        max_padding = 0
+        for ind, ind_cfg, gran in state_config.technical_indicators:
+            padding = indicator_padding[ind.__name__](ind_cfg)
+            padding *= granularity_convert(gran, granularity)
+            max_padding = max(max_padding, padding)
+        return int(max_padding)
+
+    def get_current_state(self, price: float, volume: float):
+        self.provider.update_data(price, volume)
+
+        market_data = self.provider.get_market_data(self.trade_frequency, self.state_config.technical_indicators)
+        price_data = {gran: np.array(data.iloc[-self.padding - 1:]['price']) for gran, data in market_data.items()}
+
+        # Market state
+        market_state = [market_data[self.trade_frequency][key].iloc[-1] / price_data[self.trade_frequency][-1]
+                        for key in self.state_config.market_state]
+
+        # Technical indicators
+        # Compute the technical indicators for the current trading window and get the value for current state
+        technical_indicators = []
+        for ind_func, ind_params, gran in self.state_config.technical_indicators:
+            ind_padding = indicator_padding[ind_func.__name__](ind_params)
+            ti = ind_func(price_data[gran][-ind_padding - 1:], **ind_params)
+            technical_indicators.append(ti)
+
+        if any(np.isnan(technical_indicators)):
+            raise ValueError(f'NaN value encountered when computing technical indicators: {technical_indicators}')
+
+        # Account state
+        account_state = [getattr(self, attr_) for attr_ in self.state_config.account_state]
+        account_state[0] /= self.initial_cash
+
+        observation = np.array(market_state + technical_indicators + account_state)
+        return observation, price_data[self.trade_frequency][-1]
+
+    def update_position(self, price: float, positon: float, balance: float):
+        self.cash_balance, self.asset_holdings = balance, positon
+
+        current_net_worth = self.cash_balance + self.asset_holdings * price
+        reward = current_net_worth - self.previous_net_worth if self.previous_net_worth > 0 else current_net_worth - self.initial_cash
+
+        self.previous_net_worth = current_net_worth
+
+        return reward
+
