@@ -91,8 +91,7 @@ class MarketDataProvider(AbstractProvider, metaclass=Singleton):
             if gran in self.data_cache:
                 market_data[gran] = self.data_cache[gran]
             elif gran != '1min':
-                #self.data_cache[gran] = self.exchange_data.groupby(pd.Grouper(freq=gran, closed='right', label='right')).agg(self.AGG_MAPPING)
-                self.data_cache[gran] = self.exchange_data.groupby(pd.Grouper(freq=gran)).agg(self.AGG_MAPPING)
+                self.data_cache[gran] = self.exchange_data.groupby(pd.Grouper(freq=gran, closed='right', label='right')).agg(self.AGG_MAPPING)
                 market_data[gran] = self.data_cache[gran]
             else:
                 market_data[gran] = self.exchange_data
